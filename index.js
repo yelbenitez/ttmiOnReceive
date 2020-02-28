@@ -1,13 +1,12 @@
+const jwt = require('jsonwebtoken');
 const AWS = require('aws-sdk');
-const ddb = new AWS.DynamoDB.DocumentClient();
 const s3 = new AWS.S3();
+var config = require('./config.json');
 require('./patch.js');
-let send = undefined;
 
-const endpoint = "0qplh5wgmg.execute-api.ap-northeast-1.amazonaws.com/Test"
-const s3Bucket = "s3-ttmi-storage-dev";
-
-const dynamoTable = 'ttmi-sessions'
+const s3Bucket = "s3-ttmi-storage-prod";
+const endpoint = "kmwnrvhe1e.execute-api.ap-northeast-1.amazonaws.com/test"
+let send = undefined; 
 
 function init(event) {
     const apigwManagementApi = new AWS.ApiGatewayManagementApi({
@@ -22,73 +21,71 @@ function init(event) {
     }
 }
 
+
+
 exports.handler = (event, context, callback) => {
-    init(event);
-    console.log("handler event")
-    console.log(event)
-    console.log("BODY")
-    console.log(event.body)
-    //const body = JSON.parse(event.body);
-    let message = event.message;
+    init(event)
+    
     let auth = event.auth;
     let platoonId = event.platoonId;
+    let username = jwt.verify(auth, config.jwt.KEY)
+    
 
-    console.log(auth);
-    console.log(platoonId);
-
-    // let message = "Temo"
     if (typeof auth === "undefined" || typeof platoonId === "undefined") {
-        //Dont send anything if no authT
-        console.log("AUTH PLATOON")
         return {}
     }
-    else {
+    else{
 
-        getFile(platoonId).then(data => {
-          //  if (err) {
-           //     console.log("hase errro in getting file");
-           //     console.log(err);
-           //     return callback(null, { statusCode: 500, message: "Something went wrong in getting the S3 File." })
-          //  }
-            console.log("has data")
-            console.log(data)
-            var data = data.Body.toString()
-            getConnections().then((conn) => {
-                console.log(conn.Items);
-                conn.Items.forEach(function(connection) {
-                    if (connection.authToken == auth) {
-                        console.log("Connection " + connection.connectionId)
-                        // if (connection.type == "receiver") {
-                        send(connection.connectionId, JSON.stringify({statusCode:200, data:data}));
-                        // }
+        getFile(platoonId).then(res => {
+            // for checking time difference 
+            var d = new Date();
+            var n = d.getTime();
+            var checkDiff = n - res.LastModified.getTime();
+            var isOutDated = false;
+            
+            if(checkDiff > 300000){
+                isOutDated = true; 
+            }
+            console.log("checkdiff: "+checkDiff)
+            console.log("is outdated? "+isOutDated)
+            var body = res.Body.toString()
+             s3.getObject({Bucket: s3Bucket, Key: "sessions/"+username.username+"/auth.json"}, function (err,data){
+                 var content = ""+data.Body+"";
+                 var jsonVar = JSON.parse(content);
+                 
+                 if(auth == jsonVar.token){
+                    if(isOutDated == false){
+                        send(jsonVar.connectionId, JSON.stringify({data:body}));
+                    }else{
+                        send(jsonVar.connectionId,JSON.stringify({data:null}));
                     }
-                });
-            });
+                 }
+            })
+           
         }, err => {
             console.log(err)
-            console.log("WE HAVE A PROBLEM")
-          
-           getConnections().then((conn) => {
-                console.log(conn.Items);
-                conn.Items.forEach(function(connection) {
-                    if (connection.authToken == auth) {
-                        console.log("Connection " + connection.connectionId)
-                        // if (connection.type == "receiver") {
-                        send(connection.connectionId, JSON.stringify({statusCode:500, data :{}}));
-                        // }
-                    }
-                });
-            });
+            s3.getObject({Bucket: s3Bucket, Key: "sessions/"+username.username+"/auth.json"}, function (err,data){
+                 var content = ""+data.Body+"";
+                 var jsonVar = JSON.parse(content);
+                 
+                 if(auth == jsonVar.token){
+                    send(jsonVar.connectionId, JSON.stringify({statusCode:500, data :{}}));
+                 }
+            })
             
         })
     }
 
 };
 
-function getConnections() { return ddb.scan({ TableName: dynamoTable, }).promise(); }
 
 async function getFile(platoonId) {
-    console.log("GET fiLE")
-    const s3Key = platoonId + "/" + platoonId + ".json";
+    const s3Key = "platoons/"+platoonId + "/" + platoonId + ".json";
     return await new AWS.S3().getObject({ Bucket: s3Bucket, Key: s3Key }).promise();
+}
+
+
+async function getImage(platoonId) {
+    const s3Key = "images/"+platoonId + "/" +platoonId + ".json";
+    return await new AWS.S3().getObject({Bucket:s3Bucket,Key: s3Key}).promise();
 }
